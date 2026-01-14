@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工程預算執行狀況</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<link rel="manifest" href="data:application/json,{
+  &quot;name&quot;:&quot;工程預算執行&quot;,
+  &quot;short_name&quot;:&quot;預算APP&quot;,
+  &quot;start_url&quot;:&quot;.&quot;,
+  &quot;display&quot;:&quot;standalone&quot;,
+  &quot;background_color&quot;:&quot;#0f172a&quot;,
+  &quot;theme_color&quot;:&quot;#0f172a&quot;
+}">
+<meta name="theme-color" content="#0f172a">
+
+<style>
+body { background:#f5f7fb; }
+th { white-space: nowrap; }
+
+.table-wrap { max-height: 60vh; overflow: auto; }
+
+/* 表頭鎖定 */
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: #0f172a;
+  color: #fff;
+}
+
+/* 左側第一欄鎖定 */
+thead th:first-child {
+  left: 0;
+  z-index: 40;
+}
+tbody td:first-child {
+  position: sticky;
+  left: 0;
+  background: #ffffff;
+  z-index: 10;
+  border-right: 1px solid #e5e7eb;
+}
+</style>
+</head>
+
+<body class="text-gray-800">
+
+<!-- Header -->
+<header class="bg-gradient-to-r from-slate-900 to-slate-800 text-white px-6 py-4">
+  <div class="flex flex-wrap gap-4 justify-between items-center">
+    <div class="text-xl font-bold">📊 工程預算執行狀況</div>
+    <div class="flex gap-3 items-center">
+      <input
+        id="searchInput"
+        type="text"
+        placeholder="🔍 查詢案場 / 關鍵字"
+        class="px-3 py-2 rounded text-gray-800"
+        oninput="render()"
+      >
+      <span id="netStatus" class="text-sm">🟢 線上</span>
+      <input type="file" id="excelInput" class="hidden" accept=".xlsx">
+      <button onclick="openExcel()" class="bg-blue-600 px-4 py-2 rounded">匯入 Excel</button>
+      <button onclick="exportExcel()" class="bg-slate-600 px-4 py-2 rounded">匯出 Excel</button>
+    </div>
+  </div>
+</header>
+
+<!-- KPI -->
+<section class="grid grid-cols-1 md:grid-cols-5 gap-6 px-6 py-6">
+  <div class="bg-white p-5 rounded-xl">
+    <p class="text-sm text-gray-500">原編預算總計（億）</p>
+    <p class="text-3xl font-bold" id="kOrigin">0</p>
+  </div>
+  <div class="bg-white p-5 rounded-xl">
+    <p class="text-sm text-gray-500">總執行預算（億）</p>
+    <p class="text-3xl font-bold" id="kExec">0</p>
+  </div>
+  <div class="bg-white p-5 rounded-xl border border-orange-400">
+    <p class="text-sm text-gray-500">預算增減差異（億）</p>
+    <p class="text-3xl font-bold text-orange-500" id="kDiff">0</p>
+  </div>
+  <div class="bg-white p-5 rounded-xl border border-green-400">
+    <p class="text-sm text-gray-500">累計已請款（億）</p>
+    <p class="text-3xl font-bold text-green-600" id="kPaid">0</p>
+  </div>
+  <div class="bg-white p-5 rounded-xl border border-indigo-400">
+    <p class="text-sm text-gray-500">總體執行進度</p>
+    <p class="text-3xl font-bold text-indigo-600">
+      <span id="kRate">0</span>%
+    </p>
+  </div>
+</section>
+
+<!-- Table -->
+<section class="bg-white mx-6 rounded-xl shadow table-wrap">
+<table class="min-w-full text-sm">
+<thead>
+<tr>
+  <th class="p-3">專案名稱</th>
+  <th class="p-3">總建坪面積</th>
+  <th class="p-3">原編預算(萬)</th>
+  <th class="p-3">原編預算造價</th>
+  <th class="p-3 text-yellow-400">差異金額(萬)</th>
+  <th class="p-3 text-yellow-400">差異造價</th>
+  <th class="p-3 text-yellow-400">差異率</th>
+  <th class="p-3 bg-teal-800">執行預算(萬)</th>
+  <th class="p-3 bg-teal-800">執行預算造價</th>
+  <th class="p-3">請款累計(萬)</th>
+  <th class="p-3">已請款造價</th>
+  <th class="p-3">請款佔比</th>
+</tr>
+</thead>
+<tbody id="tbody"></tbody>
+</table>
+</section>
+
+<script>
+let data = JSON.parse(localStorage.getItem('budgetData') || '[]');
+
+const fmt = n => Number(n || 0).toLocaleString('zh-TW');
+const toYi = n => fmt((n / 10000).toFixed(2));
+
+function render() {
+  let origin=0, exec=0, paid=0, diff=0;
+  const keyword = (searchInput.value || '').toLowerCase();
+
+  tbody.innerHTML = '';
+
+  data
+    .filter(d => !keyword || String(d.name).toLowerCase().includes(keyword))
+    .forEach(d => {
+      origin += d.origin || 0;
+      exec   += d.exec || 0;
+      paid   += d.paid || 0;
+      diff   += d.diff || 0;
+
+      tbody.innerHTML += `
+      <tr class="border-b hover:bg-gray-50">
+        <td class="p-2">${d.name}</td>
+        <td class="p-2 text-right">${fmt(d.area)}</td>
+        <td class="p-2 text-right">${fmt(d.origin)}</td>
+        <td class="p-2 text-right">${fmt(d.originCost)}</td>
+        <td class="p-2 text-right text-orange-500">${fmt(d.diff)}</td>
+        <td class="p-2 text-right">${fmt(d.diffCost)}</td>
+        <td class="p-2 text-center">${d.diffRate}%</td>
+        <td class="p-2 text-right font-bold">${fmt(d.exec)}</td>
+        <td class="p-2 text-right">${fmt(d.execCost)}</td>
+        <td class="p-2 text-right">${fmt(d.paid)}</td>
+        <td class="p-2 text-right">${fmt(d.paidCost)}</td>
+        <td class="p-2 text-center">${d.paidRate}%</td>
+      </tr>`;
+    });
+
+  kOrigin.textContent = toYi(origin);
+  kExec.textContent   = toYi(exec);
+  kDiff.textContent   = toYi(diff);
+  kPaid.textContent   = toYi(paid);
+  kRate.textContent   = exec ? ((paid / exec) * 100).toFixed(1) : 0;
+}
+
+/* Excel 匯入 */
+function openExcel(){
+  excelInput.value='';
+  excelInput.click();
+}
+
+excelInput.addEventListener('change', e=>{
+  const reader=new FileReader();
+  reader.onload=x=>{
+    const wb=XLSX.read(x.target.result,{type:'array'});
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:0});
+
+    data = rows.map(r=>{
+      const exec = +r['執行預算(萬)'] || 0;
+      const paid = +r['請款累計(萬)'] || 0;
+      const diff = exec - paid;
+      return {
+        name:r['專案名稱'],
+        area:r['總建坪面積'],
+        origin:r['原編預算(萬)'],
+        originCost:r['原編預算造價'],
+        diff,
+        diffCost:r['差異造價'],
+        diffRate: exec ? ((diff/exec)*100).toFixed(1) : 0,
+        exec,
+        execCost:r['執行預算造價'],
+        paid,
+        paidCost:r['已請款造價'],
+        paidRate: exec ? ((paid/exec)*100).toFixed(1) : 0
+      };
+    });
+
+    localStorage.setItem('budgetData',JSON.stringify(data));
+    render();
+    alert('✅ Excel 匯入成功');
+  };
+  reader.readAsArrayBuffer(e.target.files[0]);
+});
+
+/* 匯出 */
+function exportExcel(){
+  const ws=XLSX.utils.json_to_sheet(data);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'預算執行');
+  XLSX.writeFile(wb,'工程預算執行.xlsx');
+}
+
+/* 網路狀態 */
+function updateNet(){
+  netStatus.textContent = navigator.onLine ? '🟢 線上' : '🔴 離線';
+}
+window.addEventListener('online',updateNet);
+window.addEventListener('offline',updateNet);
+updateNet();
+
+render();
+</script>
+</body>
+</html>
